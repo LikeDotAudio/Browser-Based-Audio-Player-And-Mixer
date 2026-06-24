@@ -1,0 +1,1061 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multichannel Mixer</title>
+<style>
+  :root {
+    --bg: #1b1d22;
+    --panel: #24272e;
+    --strip: #2c3038;
+    --accent: #46c2ff;
+    --text: #d7dce3;
+    --muted: #8a909b;
+    --on: #38d56b;
+    --solo: #ffcf3a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.3 "Segoe UI", system-ui, sans-serif;
+    -webkit-user-select: none; user-select: none;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 16px; background: var(--panel);
+    box-shadow: 0 2px 8px #0006; position: sticky; top: 0; z-index: 10; flex-wrap: wrap;
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .5px; }
+  .transport { display: flex; gap: 8px; align-items: center; }
+  button.tbtn {
+    background: var(--strip); color: var(--text);
+    border: 1px solid #3a3f49; border-radius: 6px;
+    padding: 7px 14px; font-size: 14px; cursor: pointer;
+  }
+  button.tbtn:hover { border-color: var(--accent); }
+  button.tbtn:disabled { opacity: .4; cursor: default; }
+  #playBtn.playing { background: #1f6b3a; border-color: var(--on); }
+  .time { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 110px; }
+  /* LCD / old-clock style time readout (lit digits over faint "off" segments) */
+  .lcd {
+    position: relative; display: inline-block;
+    font: 700 18px/1 "Consolas", "Courier New", monospace; letter-spacing: 2px;
+    padding: 6px 12px; background: #160d00; border: 1px solid #3a2a10;
+    border-radius: 5px; box-shadow: inset 0 1px 5px #000; font-variant-numeric: tabular-nums;
+  }
+  .lcd-off { color: rgba(255,150,0,0.13); }
+  .lcd-on {
+    position: absolute; left: 12px; top: 6px; color: #ff9a00;
+    text-shadow: 0 0 7px rgba(255,140,0,0.85);
+  }
+  label.file {
+    background: var(--accent); color: #06222e; font-weight: 600;
+    padding: 7px 14px; border-radius: 6px; cursor: pointer;
+  }
+  label.file input { display: none; }
+
+  #console { display: flex; gap: 6px; padding: 16px; overflow-x: auto; align-items: stretch; }
+  .strip {
+    background: var(--strip); border: 1px solid #00000033; border-radius: 8px;
+    width: 82px; flex: 0 0 auto; display: flex; flex-direction: column; align-items: center;
+    padding: 0 6px 8px; gap: 8px; overflow: hidden;
+  }
+  .strip.master { width: 102px; background: #30343d; border-color: #444b57; }
+  .strip.echo   { width: 102px; background: #2a2f3a; }
+  /* coloured group header bar at the top of each strip */
+  .grouphdr { width: calc(100% + 12px); margin: 0 -6px 4px; height: 8px; background: #555; }
+  .section-label { font-size: 10px; color: var(--muted); letter-spacing: .6px; text-transform: uppercase; }
+
+  /* per-track scrolling waveform preview (playhead at bottom, near the fader) */
+  .wave {
+    width: 72px; height: 120px; display: block;
+    background: #101216; border: 1px solid #0008; border-radius: 4px;
+  }
+  .strip.master .wave, .strip.echo .wave { visibility: hidden; }
+
+  .mini { width: 66px; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  input[type=range].h {
+    -webkit-appearance: none; appearance: none;
+    width: 66px; height: 4px; border-radius: 3px; background: #4a5160; outline: none;
+  }
+  input[type=range].h::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 14px; height: 16px; border-radius: 2px; background: var(--accent); cursor: pointer;
+  }
+  input[type=range].h::-moz-range-thumb {
+    width: 14px; height: 16px; border-radius: 2px; border: none; background: var(--accent); cursor: pointer;
+  }
+  .valtag { font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* VU + vertical fader. The fader is a horizontal slider rotated 90deg so the
+     thumb is a real RECTANGLE on every browser (not the default round dot). */
+  .faderRow { display: flex; gap: 8px; align-items: stretch; height: 225px; }
+  .vu {
+    width: 10px; border-radius: 3px; position: relative; overflow: hidden; border: 1px solid #0008;
+    /* absolute colour scale: green up to 3/4, yellow, then red at the top */
+    background: linear-gradient(to top, #21c95a 0%, #21c95a 74%, #f5d020 78%, #f5d020 88%, #ff3b30 93%, #ff3b30 100%);
+  }
+  .vu > i {  /* dark "off" cover from the top; its height = the unlit portion */
+    position: absolute; left: 0; right: 0; top: 0; height: 100%;
+    background: #15171b; transition: height .04s linear;
+  }
+  .faderWrap { position: relative; width: 30px; height: 180px; }
+  .faderWrap input[type=range] {
+    position: absolute; top: 50%; left: 50%;
+    width: 180px; height: 26px; margin: 0;
+    transform: translate(-50%, -50%) rotate(-90deg);
+    -webkit-appearance: none; appearance: none; background: transparent; cursor: pointer;
+  }
+  .faderWrap input[type=range]::-webkit-slider-runnable-track {
+    height: 6px; background: #4a5160; border-radius: 3px;
+  }
+  .faderWrap input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 14px; height: 28px; margin-top: -11px;
+    border-radius: 2px; background: var(--accent); border: 1px solid #06222e;
+    box-shadow: 0 1px 3px #000a;
+  }
+  .faderWrap input[type=range]::-moz-range-track { height: 6px; background: #4a5160; border-radius: 3px; }
+  .faderWrap input[type=range]::-moz-range-thumb {
+    width: 14px; height: 28px; border-radius: 2px; background: var(--accent);
+    border: 1px solid #06222e; box-shadow: 0 1px 3px #000a;
+  }
+
+  .btn {
+    width: 66px; padding: 5px 0; text-align: center; border-radius: 5px;
+    border: 1px solid #444b57; background: #353b45; color: var(--muted);
+    cursor: pointer; font-size: 11px; font-weight: 600; letter-spacing: .5px;
+    touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+  }
+  .btn:active { filter: brightness(1.35); }
+  .btn.on.active { background: #1f6b3a; border-color: var(--on); color: #d7ffe4; }
+  .btn.solo.active { background: #6b5a14; border-color: var(--solo); color: #fff3c4; }
+
+  .name {
+    width: 70px; text-align: center; font-size: 11px;
+    background: #1b1e24; border: 1px solid #3a3f49; border-radius: 4px; color: var(--text); padding: 3px 2px;
+  }
+  .name:focus { outline: 1px solid var(--accent); }
+  .chnum { font-size: 10px; color: var(--muted); font-weight: 700; font-variant-numeric: tabular-nums; }
+  /* "rude" solo indicator on the master — blinks while any channel is soloed */
+  .rude {
+    width: 70px; padding: 5px 0; text-align: center; border-radius: 5px;
+    border: 1px solid #5a4a14; background: #2a2a2a; color: #6a6a6a;
+    font-size: 10px; font-weight: 700; letter-spacing: .5px; cursor: pointer; opacity: .5;
+    touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+  }
+  .rude.active { background: var(--solo); color: #3a2c00; border-color: #fff3c4; opacity: 1; animation: rudeBlink .5s steps(1) infinite; }
+  @keyframes rudeBlink { 50% { background: #6b5a14; color: #fff3c4; } }
+  #hint { padding: 60px 40px; text-align: center; color: var(--muted); line-height: 1.7; }
+  #bigLoad {
+    font-size: 22px; font-weight: 700; padding: 26px 44px; border-radius: 12px;
+    background: var(--accent); color: #06222e; border: none; cursor: pointer;
+    box-shadow: 0 6px 20px #0007;
+  }
+  #bigLoad:hover { filter: brightness(1.08); }
+  #hintNote { margin-top: 18px; font-size: 13px; color: var(--muted); }
+  #bigLoad.loading { animation: pulse 1s ease-in-out infinite; cursor: default; }
+  @keyframes pulse { 50% { opacity: .55; } }
+  #loadProgress { margin: 24px auto 0; max-width: 420px; }
+  #loadBarTrack {
+    height: 16px; background: #15171b; border: 1px solid #0008; border-radius: 9px; overflow: hidden;
+  }
+  #loadBarFill {
+    height: 100%; width: 0%; border-radius: 9px; position: relative;
+    background: linear-gradient(90deg, var(--accent), #2ec4b6); transition: width .15s ease;
+  }
+  #loadBarFill::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.4), transparent);
+    animation: shimmer 1.1s linear infinite;
+  }
+  @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+  #loadCount { margin-top: 9px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #credit { margin-top: 28px; font-size: 12px; color: #6b7280; font-style: italic; }
+  #tutorial { margin: 30px auto 0; max-width: 1100px; }
+  #tutorial h2 { font-size: 15px; color: var(--text); text-align: center; margin: 0 0 14px; letter-spacing: .5px; }
+  #manualImg { display: block; margin: 0 auto; max-width: 100%; max-height: 72vh; border-radius: 8px; box-shadow: 0 6px 24px #0008; }
+  code { background: #000; padding: 1px 5px; border-radius: 3px; color: var(--accent); }
+</style>
+</head>
+<body>
+<header id="topbar" style="display:none">
+  <button id="loadOtherBtn" class="tbtn">Load Other Folder</button>
+  <div class="transport">
+    <button id="playBtn" class="tbtn" disabled>▶ Play</button>
+    <button id="rewBtn" class="tbtn" disabled>⏮ Rewind</button>
+    <button id="back10Btn" class="tbtn" disabled>« 10s</button>
+  </div>
+  <span class="lcd">
+    <span class="lcd-off">88:88 / 88:88</span>
+    <span class="lcd-on" id="timeLabel">00:00 / 00:00</span>
+  </span>
+  <button id="fwd10Btn" class="tbtn" disabled>10s »</button>
+  <input id="dirInput" type="file" webkitdirectory directory multiple style="display:none">
+  <span id="fileName" style="display:none"></span>
+</header>
+
+<div id="hint">
+  <button id="bigLoad">📁 SELECT FOLDER OF TRACKS</button>
+  <div id="hintNote">Checking for a remembered folder…</div>
+
+  <div id="loadProgress" style="display:none">
+    <div id="loadBarTrack"><div id="loadBarFill"></div></div>
+    <div id="loadCount">0 / 0</div>
+  </div>
+
+  <div id="tutorial" style="display:none">
+    <h2>How the mixer works</h2>
+    <img id="manualImg" src="Manual_annotated.png" alt="Annotated mixer manual">
+  </div>
+
+  <div id="credit">Created by Anthony Kuzub — for educational and experimental purposes</div>
+</div>
+<div id="console" style="display:none"></div>
+
+<script>
+(() => {
+  "use strict";
+
+  const AUDIO_RE = /\.(wav|flac|mp3|m4a|aac|ogg|oga|opus|wma|aif|aiff|caf)$/i;
+  // NNN[L|R][pct] - Name.ext   e.g. 003L - Congo (full left), 003R10 - Bongo (10% right), 000-Kick (centre)
+  const NAME_RE = /^(\d{3,4})\s*([LR])?(\d{1,3})?\s*-\s*(.+?)\.[^.]+$/i;
+  const PALETTE = ["#46c2ff","#ff6b6b","#ffd166","#06d6a0","#c792ea","#f78c6b",
+                   "#7ec4ff","#b9f27c","#ff9ff3","#feca57","#54a0ff","#ef5da8",
+                   "#2ec4b6","#e09f3e","#9b5de5","#80ed99"];
+
+  let ctx = null;
+  let masterGain = null, masterAnalyserL = null, masterAnalyserR = null;
+  let echoInput = null, echoReturn = null, delayA = null, delayB = null;
+  let reverbInput = null, reverbReturn = null;
+  let echoAnalyserL = null, echoAnalyserR = null;
+  let reverbAnalyserL = null, reverbAnalyserR = null;
+  let convolver = null;
+  let echoTimeSec = 0.28;       // current echo delay time (beat * subdivision)
+  let echoBeatSec = 0.5;        // tapped quarter-note length
+  let echoDiv = 1;              // subdivision factor applied to the beat
+  let echoTimeLabelEl = null;   // readout under the TAP button
+  let taps = [];                // tap-tempo timestamps
+  let maxDuration = 0;
+
+  // Transport
+  let sources = [];
+  let isPlaying = false, startTime = 0, offset = 0, stopFlag = false;
+
+  const channels = [];
+  let soloAny = false;
+
+  const consoleEl  = document.getElementById("console");
+  const hintEl     = document.getElementById("hint");
+  const playBtn    = document.getElementById("playBtn");
+  const rewBtn     = document.getElementById("rewBtn");
+  const timeLabel  = document.getElementById("timeLabel");
+  const fileNameEl = document.getElementById("fileName");
+
+  document.getElementById("dirInput").addEventListener("change", onFolder);
+  document.getElementById("loadOtherBtn").addEventListener("click", () => pickFolder(false));
+  document.getElementById("bigLoad").addEventListener("click", () => pickFolder(true));
+  playBtn.addEventListener("click", togglePlay);
+  rewBtn.addEventListener("click", rewind);
+  document.getElementById("back10Btn").addEventListener("click", () => skip(-10));
+  document.getElementById("fwd10Btn").addEventListener("click", () => skip(10));
+
+  // Hold Alt to temporarily un-link a grouped fader (it re-latches on the next normal move).
+  let altDown = false;
+  window.addEventListener("keydown", e => { if (e.key === "Alt") altDown = true; });
+  window.addEventListener("keyup",   e => { if (e.key === "Alt") altDown = false; });
+  window.addEventListener("blur", () => { altDown = false; });
+
+  function fmt(t) {
+    t = Math.max(0, t | 0);
+    return String((t / 60) | 0).padStart(2, "0") + ":" + String(t % 60).padStart(2, "0");
+  }
+
+  function parseName(filename) {
+    const m = filename.match(NAME_RE);
+    if (!m) return { number: null, label: filename.replace(AUDIO_RE, ""), pan: 0, echo: 0, reverb: 0, volDb: null };
+    const lr = (m[2] || "").toUpperCase();              // L / R right after the number
+    // Optional pan amount after L/R: L20 = 20% left, R10 = 10% right. Bare L/R = 100%.
+    const pct = m[3] != null ? Math.max(0, Math.min(100, parseInt(m[3], 10))) / 100 : 1;
+    const pan = lr === "L" ? -pct : lr === "R" ? pct : 0;
+    let label = m[4].trim();
+
+    // Optional effects preset token, e.g. "[E20 R10 V0]":
+    //   E<pct> echo send %, R<pct> reverb send %, V<dB> volume (V0 = 0 dB, V-20 = -20 dB, V20 = +20 dB).
+    let echo = 0, reverb = 0, volDb = null;
+    const br = label.match(/\[([^\]]*)\]/);
+    if (br) {
+      for (const t of br[1].trim().split(/\s+/)) {
+        let mm;
+        if ((mm = t.match(/^E(-?\d+(?:\.\d+)?)$/i))) echo = Math.max(0, Math.min(1, parseFloat(mm[1]) / 100));
+        else if ((mm = t.match(/^R(-?\d+(?:\.\d+)?)$/i))) reverb = Math.max(0, Math.min(1, parseFloat(mm[1]) / 100));
+        else if ((mm = t.match(/^V(-?\d+(?:\.\d+)?)$/i))) volDb = parseFloat(mm[1]);
+      }
+      label = label.replace(/\s*\[[^\]]*\]\s*/, " ").trim();   // drop the token from the display name
+    }
+    return { number: m[1], label, pan, echo, reverb, volDb };
+  }
+
+  // Common loader. `entries` = [{ name, getBuffer: () => Promise<ArrayBuffer> }].
+  async function loadEntries(entries) {
+    entries = entries.filter(en => AUDIO_RE.test(en.name));
+    if (!entries.length) {
+      const note = document.getElementById("hintNote");
+      if (note) note.textContent = "No audio files found in that folder — try another.";
+      return;
+    }
+
+    // Friendly loading state (header stays hidden until the mixer is built).
+    const big = document.getElementById("bigLoad");
+    const note = document.getElementById("hintNote");
+    hintEl.style.display = "";
+    if (big) { big.textContent = "🎶 Loading…"; big.disabled = true; big.classList.add("loading"); }
+    if (note) note.textContent = "Decoding your tracks — one moment…";
+    const tut = document.getElementById("tutorial"); if (tut) tut.style.display = "";  // manual: only while loading
+    const progEl = document.getElementById("loadProgress");
+    const fillEl = document.getElementById("loadBarFill");
+    const countEl = document.getElementById("loadCount");
+    if (progEl) progEl.style.display = "";
+
+    if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+    stop(true); offset = 0;
+
+    // Parse + sort by number then name.
+    const parsed = entries.map(en => ({ en, ...parseName(en.name) }));
+    parsed.sort((a, b) => {
+      const na = a.number ?? "9999", nb = b.number ?? "9999";
+      return na === nb ? a.label.localeCompare(b.label) : na.localeCompare(nb);
+    });
+
+    // Assign a colour per distinct number (same number -> same colour).
+    const colourByNum = {}; let ci = 0;
+    for (const p of parsed) {
+      const key = p.number ?? ("solo:" + p.label);
+      if (!(key in colourByNum)) colourByNum[key] = PALETTE[ci++ % PALETTE.length];
+      p.colour = colourByNum[key];
+    }
+
+    const total = parsed.length;
+    let done = 0;
+    if (fillEl) fillEl.style.width = "0%";
+    if (countEl) countEl.textContent = "0 / " + total;
+    fileNameEl.textContent = "Decoding " + total + " files…";
+    const decoded = [];
+    for (const p of parsed) {
+      try {
+        const buf = await ctx.decodeAudioData(await p.en.getBuffer());
+        decoded.push({ ...p, buffer: buf });
+      } catch (err) { console.warn("Skip (decode failed):", p.en.name, err); }
+      done++;
+      if (fillEl) fillEl.style.width = Math.round(done / total * 100) + "%";
+      if (countEl) countEl.textContent = done + " / " + total + " tracks loaded";
+      await new Promise(r => requestAnimationFrame(r));   // let the bar repaint
+    }
+    if (!decoded.length) { fileNameEl.textContent = "Could not decode any files."; return; }
+
+    maxDuration = Math.max(...decoded.map(d => d.buffer.duration));
+    fileNameEl.textContent = decoded.length + " tracks · " + fmt(maxDuration);
+
+    buildGraph(decoded);
+    buildUI();
+    playBtn.disabled = false; rewBtn.disabled = false;
+    document.getElementById("back10Btn").disabled = false;
+    document.getElementById("fwd10Btn").disabled = false;
+    timeLabel.textContent = "00:00 / " + fmt(maxDuration);
+
+    // Auto-play once loaded (the folder-pick click counts as the user gesture).
+    offset = 0;
+    play();
+  }
+
+  // "Load Other Folder" button -> pick any folder.
+  function onFolder(e) {
+    const entries = Array.from(e.target.files).map(f => ({ name: f.name, getBuffer: () => f.arrayBuffer() }));
+    loadEntries(entries);
+  }
+
+  // ---- Remember the chosen folder via the File System Access API (no server needed) ----
+  const IDB_DB = "mixerDB", IDB_STORE = "handles", HANDLE_KEY = "tracksDir";
+  function idb() {
+    return new Promise((res, rej) => {
+      const r = indexedDB.open(IDB_DB, 1);
+      r.onupgradeneeded = () => r.result.createObjectStore(IDB_STORE);
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+  }
+  async function saveHandle(h) {
+    try { const db = await idb(); db.transaction(IDB_STORE, "readwrite").objectStore(IDB_STORE).put(h, HANDLE_KEY); } catch (e) {}
+  }
+  async function getStoredHandle() {
+    try {
+      const db = await idb();
+      return await new Promise(res => {
+        const g = db.transaction(IDB_STORE, "readonly").objectStore(IDB_STORE).get(HANDLE_KEY);
+        g.onsuccess = () => res(g.result || null); g.onerror = () => res(null);
+      });
+    } catch (e) { return null; }
+  }
+
+  async function loadFromDir(handle) {
+    const entries = [];
+    for await (const [name, h] of handle.entries()) {
+      if (h.kind === "file" && AUDIO_RE.test(name))
+        entries.push({ name, getBuffer: async () => (await h.getFile()).arrayBuffer() });
+    }
+    await loadEntries(entries);
+  }
+
+  // Button handler: pick a folder; optionally remember it as the Tracks folder.
+  async function pickFolder(remember) {
+    if (!window.showDirectoryPicker) { document.getElementById("dirInput").click(); return; }
+    try {
+      const handle = await window.showDirectoryPicker({ id: "tracks", mode: "read" });
+      if (remember) saveHandle(handle);
+      await loadFromDir(handle);
+    } catch (e) { /* user cancelled */ }
+  }
+
+  // On startup: reload the remembered folder if permission is still granted.
+  async function autoload() {
+    const handle = await getStoredHandle();
+    if (handle && handle.queryPermission) {
+      try {
+        if (await handle.queryPermission({ mode: "read" }) === "granted") { await loadFromDir(handle); return; }
+      } catch (e) {}
+    }
+    const note = document.getElementById("hintNote");
+    if (note) note.textContent = "Choose the TracksWAV folder (it sits next to this page). It will be remembered next time.";
+  }
+
+  // Downsample a buffer to a max-amplitude envelope for fast waveform drawing.
+  function computePeaks(buffer, binsPerSec) {
+    const sr = buffer.sampleRate;
+    const samplesPerBin = Math.max(1, Math.floor(sr / binsPerSec));
+    const ch0 = buffer.getChannelData(0);
+    const ch1 = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : null;
+    const nBins = Math.ceil(ch0.length / samplesPerBin);
+    const peaks = new Float32Array(nBins);
+    for (let b = 0; b < nBins; b++) {
+      const start = b * samplesPerBin, end = Math.min(start + samplesPerBin, ch0.length);
+      let m = 0;
+      for (let i = start; i < end; i++) {
+        let v = Math.abs(ch0[i]);
+        if (ch1) { const v2 = Math.abs(ch1[i]); if (v2 > v) v = v2; }
+        if (v > m) m = v;
+      }
+      peaks[b] = m;
+    }
+    return peaks;
+  }
+
+  // Synthetic reverb impulse: white noise with an exponential decay envelope.
+  function makeImpulse(seconds, decay) {
+    const rate = ctx.sampleRate, len = Math.floor(rate * seconds);
+    const ir = ctx.createBuffer(2, len, rate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = ir.getChannelData(ch);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+    }
+    return ir;
+  }
+
+  // Recompute the echo time from the tapped beat and the chosen subdivision.
+  function applyEchoTime() {
+    echoTimeSec = Math.min(2.0, Math.max(0.05, echoBeatSec * echoDiv));
+    if (delayA) delayA.delayTime.setTargetAtTime(echoTimeSec, ctx.currentTime, 0.01);
+    if (delayB) delayB.delayTime.setTargetAtTime(echoTimeSec, ctx.currentTime, 0.01);
+    if (echoTimeLabelEl)
+      echoTimeLabelEl.textContent = Math.round(echoTimeSec * 1000) + " ms · " + Math.round(60 / echoBeatSec) + " BPM";
+  }
+
+  // Tap-tempo: average the recent tap intervals into the quarter-note beat.
+  function tapTempo() {
+    const now = performance.now();
+    if (taps.length && now - taps[taps.length - 1] > 2000) taps = [];  // stale -> restart
+    taps.push(now);
+    if (taps.length < 2) { if (echoTimeLabelEl) echoTimeLabelEl.textContent = "tap…"; return; }
+    const recent = taps.slice(-5);
+    let sum = 0;
+    for (let i = 1; i < recent.length; i++) sum += recent[i] - recent[i - 1];
+    echoBeatSec = (sum / (recent.length - 1)) / 1000;
+    applyEchoTime();
+  }
+
+  function buildGraph(decoded) {
+    channels.length = 0;
+    const BINS_PER_SEC = 120;
+
+    masterGain = ctx.createGain(); masterGain.gain.value = 0.8;
+    masterGain.connect(ctx.destination);
+    // Split the master into L/R for separate stereo metering.
+    const masterSplit = ctx.createChannelSplitter(2);
+    masterGain.connect(masterSplit);
+    masterAnalyserL = ctx.createAnalyser(); masterAnalyserL.fftSize = 1024;
+    masterAnalyserR = ctx.createAnalyser(); masterAnalyserR.fftSize = 1024;
+    masterSplit.connect(masterAnalyserL, 0);
+    masterSplit.connect(masterAnalyserR, 1);
+
+    // Stereo ping-pong echo bus (both delays follow the tap-tempo time).
+    echoInput = ctx.createGain(); echoInput.gain.value = 1;
+    delayA = ctx.createDelay(2.0); delayA.delayTime.value = echoTimeSec;
+    delayB = ctx.createDelay(2.0); delayB.delayTime.value = echoTimeSec;
+    const fbA = ctx.createGain(); fbA.gain.value = 0.45;
+    const fbB = ctx.createGain(); fbB.gain.value = 0.45;
+    const panA = ctx.createStereoPanner(); panA.pan.value = -1;
+    const panB = ctx.createStereoPanner(); panB.pan.value = 1;
+    echoReturn = ctx.createGain(); echoReturn.gain.value = 0.5;
+    echoInput.connect(delayA);
+    delayA.connect(fbA); fbA.connect(delayB);
+    delayB.connect(fbB); fbB.connect(delayA);
+    delayA.connect(panA); panA.connect(echoReturn);
+    delayB.connect(panB); panB.connect(echoReturn);
+    echoReturn.connect(masterGain);
+    const echoSplit = ctx.createChannelSplitter(2); echoReturn.connect(echoSplit);
+    echoAnalyserL = ctx.createAnalyser(); echoAnalyserL.fftSize = 1024;
+    echoAnalyserR = ctx.createAnalyser(); echoAnalyserR.fftSize = 1024;
+    echoSplit.connect(echoAnalyserL, 0); echoSplit.connect(echoAnalyserR, 1);
+
+    // Stereo reverb bus (convolution with a synthetic impulse response).
+    reverbInput = ctx.createGain(); reverbInput.gain.value = 1;
+    convolver = ctx.createConvolver(); convolver.buffer = makeImpulse(2.4, 2.6);
+    reverbReturn = ctx.createGain(); reverbReturn.gain.value = 0.5;
+    reverbInput.connect(convolver); convolver.connect(reverbReturn);
+    reverbReturn.connect(masterGain);
+    const revSplit = ctx.createChannelSplitter(2); reverbReturn.connect(revSplit);
+    reverbAnalyserL = ctx.createAnalyser(); reverbAnalyserL.fftSize = 1024;
+    reverbAnalyserR = ctx.createAnalyser(); reverbAnalyserR.fftSize = 1024;
+    revSplit.connect(reverbAnalyserL, 0); revSplit.connect(reverbAnalyserR, 1);
+
+    for (const d of decoded) {
+      const gain = ctx.createGain(); gain.gain.value = 0.8;
+      const panner = ctx.createStereoPanner(); panner.pan.value = d.pan || 0;
+      const analyser = ctx.createAnalyser(); analyser.fftSize = 512;
+      const send = ctx.createGain(); send.gain.value = d.echo || 0;        // echo send
+      const revSend = ctx.createGain(); revSend.gain.value = d.reverb || 0; // reverb send
+      gain.connect(panner); panner.connect(masterGain);
+      gain.connect(analyser);
+      gain.connect(send); send.connect(echoInput);
+      gain.connect(revSend); revSend.connect(reverbInput);
+      // V<dB> from the filename -> linear fader (clamped to +12 dB max); default 0.8 otherwise.
+      const faderInit = (d.volDb != null) ? Math.max(0, Math.min(MAX_GAIN, Math.pow(10, d.volDb / 20))) : 0.8;
+      channels.push({
+        buffer: d.buffer, number: d.number, label: d.label, colour: d.colour,
+        // faders are linked across tracks that share a number; null-number tracks stay independent
+        group: d.number ? ("n:" + d.number) : ("u:" + channels.length),
+        faderSet: null,
+        gain, panner, analyser, send, revSend,
+        fader: faderInit, on: true, solo: false,
+        initialEcho: d.echo || 0, initialReverb: d.reverb || 0,
+        meterEl: null, buf: new Float32Array(analyser.fftSize), level: 0,
+        peaks: computePeaks(d.buffer, BINS_PER_SEC), binsPerSec: BINS_PER_SEC,
+        dur: d.buffer.duration, canvas: null, cctx: null, initialPan: d.pan || 0,
+      });
+    }
+  }
+
+  let rudeEl = null;
+  function applyGains() {
+    soloAny = channels.some(c => c.solo);
+    for (const c of channels) c.gain.gain.value = (c.on && (!soloAny || c.solo)) ? c.fader : 0;
+    if (rudeEl) rudeEl.classList.toggle("active", soloAny);
+  }
+
+  // Clear every solo (triggered by the rude solo light on the master).
+  function clearSolos() {
+    for (const c of channels) {
+      c.solo = false;
+      if (c.soloEl) c.soloEl.classList.remove("active");
+    }
+    applyGains();
+  }
+
+  // Move every fader in the same number-group together — unless Alt is held,
+  // which breaks this one out of the group. A later normal move re-latches the group.
+  function setGroupFader(c, v) {
+    if (altDown) {
+      c.fader = v;                       // adjust only this fader
+    } else {
+      for (const o of channels) {
+        if (o.group !== c.group) continue;
+        o.fader = v;
+        if (o.faderSet && o !== c) o.faderSet(v);
+      }
+    }
+    applyGains();
+  }
+
+  // Toggle ON for every channel in the same number-group together.
+  function setGroupOn(c) {
+    const newOn = !c.on;
+    for (const o of channels) {
+      if (o.group !== c.group) continue;
+      o.on = newOn;
+      if (o.onEl) o.onEl.classList.toggle("active", newOn);
+    }
+    applyGains();
+  }
+
+  // Toggle SOLO for every channel in the same number-group together.
+  function setGroupSolo(c) {
+    const newSolo = !c.solo;
+    for (const o of channels) {
+      if (o.group !== c.group) continue;
+      o.solo = newSolo;
+      if (o.soloEl) o.soloEl.classList.toggle("active", newSolo);
+    }
+    applyGains();
+  }
+
+  function buildUI() {
+    document.getElementById("topbar").style.display = "";   // reveal the header once loaded
+    consoleEl.innerHTML = ""; hintEl.style.display = "none"; consoleEl.style.display = "flex";
+    channels.forEach((c, i) => consoleEl.appendChild(makeStrip(c, i)));
+    consoleEl.appendChild(makeEchoStrip());
+    consoleEl.appendChild(makeReverbStrip());
+    consoleEl.appendChild(makeMasterStrip());
+    applyGains();
+  }
+
+  function slider(cls, min, max, step, val) {
+    const s = document.createElement("input");
+    s.type = "range"; s.className = cls; s.min = min; s.max = max; s.step = step; s.value = val;
+    return s;
+  }
+  function verticalFader(val, oninput) {
+    const wrap = document.createElement("div"); wrap.className = "faderWrap";
+    const f = slider("", 0, 1, 0.01, val);
+    f.addEventListener("input", () => oninput(+f.value));
+    wrap.appendChild(f); return wrap;
+  }
+
+  const SVGNS = "http://www.w3.org/2000/svg";
+  function svgEl(tag, attrs) {
+    const e = document.createElementNS(SVGNS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+
+  // British-fluted rotary knob (vanilla SVG). Drag up/down or wheel to change;
+  // Alt-click snaps to default. Returns { el, set(v) }. Pan = bipolar (centre arc).
+  function makeKnob({ value = 0, min = 0, max = 1, defaultVal = 0, bipolar = false,
+                      color = "#46c2ff", size = 42, onChange = () => {} }) {
+    const cx = size / 2, cy = size / 2, R = size / 2 - 3, bodyR = R - 4;
+    const svg = svgEl("svg", { width: size, height: size, viewBox: `0 0 ${size} ${size}` });
+    svg.style.cssText = "display:block;touch-action:none;cursor:ns-resize;overflow:visible;";
+    const uid = "k" + Math.random().toString(36).slice(2, 8);
+
+    const defs = svgEl("defs", {});
+    const grad = svgEl("radialGradient", { id: uid, cx: "38%", cy: "30%", r: "75%" });
+    grad.appendChild(svgEl("stop", { offset: "0%", "stop-color": "#6a6f78" }));
+    grad.appendChild(svgEl("stop", { offset: "55%", "stop-color": "#3a3e45" }));
+    grad.appendChild(svgEl("stop", { offset: "100%", "stop-color": "#1b1d22" }));
+    defs.appendChild(grad); svg.appendChild(defs);
+
+    const rad = d => d * Math.PI / 180;
+    const pt = (r, a) => [cx + r * Math.sin(rad(a)), cy - r * Math.cos(rad(a))];
+    const arc = (rr, a0, a1) => {
+      const p0 = pt(rr, a0), p1 = pt(rr, a1);
+      const large = Math.abs(a1 - a0) > 180 ? 1 : 0, sweep = a1 >= a0 ? 1 : 0;
+      return `M ${p0[0]} ${p0[1]} A ${rr} ${rr} 0 ${large} ${sweep} ${p1[0]} ${p1[1]}`;
+    };
+
+    svg.appendChild(svgEl("path", { d: arc(R, -135, 135), fill: "none", stroke: "#444b57", "stroke-width": 3, "stroke-linecap": "round" }));
+    const valArc = svgEl("path", { fill: "none", stroke: color, "stroke-width": 3, "stroke-linecap": "round" });
+    svg.appendChild(valArc);
+    svg.appendChild(svgEl("circle", { cx, cy, r: bodyR, fill: `url(#${uid})`, stroke: "#0a0a0a", "stroke-width": 1 }));
+    const FL = 18;
+    for (let i = 0; i < FL; i++) {
+      const a = i * (360 / FL), [x1, y1] = pt(bodyR - 1, a), [x2, y2] = pt(bodyR - 5, a);
+      svg.appendChild(svgEl("line", { x1, y1, x2, y2, stroke: "#15171b", "stroke-width": 1.2, opacity: 0.7 }));
+    }
+    const ptr = svgEl("line", { stroke: "#eef1f5", "stroke-width": 2.5, "stroke-linecap": "round" });
+    svg.appendChild(ptr);
+    svg.appendChild(svgEl("circle", { cx, cy, r: Math.max(2, bodyR * 0.16), fill: "#23262c", stroke: "#0a0a0a", "stroke-width": 0.5 }));
+
+    const clampV = v => Math.max(min, Math.min(max, v));
+    let cur = clampV(value);
+    const angleFor = v => (((v - min) / ((max - min) || 1)) * 2 - 1) * 135;
+    function render(v) {
+      cur = clampV(v);
+      const a = angleFor(cur), [ix, iy] = pt(bodyR * 0.32, a), [ox, oy] = pt(bodyR * 0.9, a);
+      ptr.setAttribute("x1", ix); ptr.setAttribute("y1", iy); ptr.setAttribute("x2", ox); ptr.setAttribute("y2", oy);
+      valArc.setAttribute("d", arc(R, bipolar ? 0 : -135, a));
+    }
+    render(cur);
+
+    let drag = false, sY = 0, sV = 0;
+    svg.addEventListener("pointerdown", e => {
+      if (e.altKey) { render(defaultVal); onChange(cur); return; }
+      drag = true; sY = e.clientY; sV = cur; svg.setPointerCapture(e.pointerId); e.preventDefault();
+    });
+    svg.addEventListener("pointermove", e => {
+      if (!drag) return;
+      const nv = Math.round((sV + ((sY - e.clientY) / 150) * (max - min)) * 100) / 100;
+      render(nv); onChange(cur);
+    });
+    const up = e => { if (drag) { drag = false; try { svg.releasePointerCapture(e.pointerId); } catch (x) {} } };
+    svg.addEventListener("pointerup", up); svg.addEventListener("pointercancel", up);
+    svg.addEventListener("wheel", e => { e.preventDefault(); render(cur + (e.deltaY < 0 ? 1 : -1) * (max - min) / 50); onChange(cur); }, { passive: false });
+
+    return { el: svg, set: render };
+  }
+
+  // SVG fader with a dB-tapered scale: silence at the bottom, 0 dB high up,
+  // +12 dB at the top. The value is the LINEAR gain. Draws a dB scale beside the
+  // slot (ticks + labels) that matches the taper. Returns { el, set(v) }.
+  const DB_MIN = -60, DB_MAX = 12;
+  const MAX_GAIN = Math.pow(10, DB_MAX / 20);                 // +12 dB ≈ 3.98x
+  const gainToPos = g => g <= 0 ? 0 : Math.max(0, Math.min(1, (20 * Math.log10(g) - DB_MIN) / (DB_MAX - DB_MIN)));
+  const posToGain = p => p <= 0.004 ? 0 : Math.pow(10, (DB_MIN + p * (DB_MAX - DB_MIN)) / 20);
+
+  function makeFader({ value = 0, color = "#46c2ff", width = 50, height = 180, onChange = () => {} }) {
+    const svg = svgEl("svg", { width, height, viewBox: `0 0 ${width} ${height}` });
+    svg.style.cssText = "display:block;touch-action:none;cursor:ns-resize;overflow:visible;";
+    const padTop = 6, padBot = 6, travel = height - padTop - padBot;   // small pad => track ≈ meter height
+    const slotCx = 14, slotW = 9, slotX = slotCx - slotW / 2;
+    const yAt = p => padTop + (1 - p) * travel;
+
+    svg.appendChild(svgEl("rect", { x: slotX, y: padTop, width: slotW, height: travel, rx: 4, fill: "#050505", stroke: "#222" }));
+    const fill = svgEl("rect", { x: slotX, width: slotW, rx: 4, fill: color, opacity: 0.5 });
+    svg.appendChild(fill);
+
+    // dB scale: ticks + labels to the right of the slot (0 dB emphasised).
+    const tickX = slotX + slotW + 1;
+    [12, 6, 0, -6, -12, -24, -40].forEach(db => {
+      const y = yAt((db - DB_MIN) / (DB_MAX - DB_MIN));
+      const zero = db === 0;
+      svg.appendChild(svgEl("line", { x1: tickX, y1: y, x2: tickX + (zero ? 7 : 4), y2: y, stroke: zero ? "#cfd6e0" : "#6b7280", "stroke-width": zero ? 1.5 : 1 }));
+      svg.appendChild(svgEl("text", {
+        x: tickX + 11, y: y + 3, "font-size": 7, "font-family": "Arial",
+        fill: zero ? "#cfd6e0" : "#7b828c"
+      })).textContent = (db > 0 ? "+" + db : db);
+    });
+
+    const thumbW = 30, thumbH = 17, thumbX = slotCx - thumbW / 2;
+    const tg = svgEl("g", {});
+    tg.appendChild(svgEl("rect", { width: thumbW, height: thumbH, rx: 3, fill: "#dcdcdc", stroke: "#555" }));
+    tg.appendChild(svgEl("line", { x1: 3, y1: thumbH / 2, x2: thumbW - 3, y2: thumbH / 2, stroke: "#333", "stroke-width": 2 }));
+    svg.appendChild(tg);
+
+    const clampV = v => Math.max(0, Math.min(MAX_GAIN, v));
+    let cur = clampV(value);
+    function render(v) {
+      cur = clampV(v);
+      const y = yAt(gainToPos(cur));
+      tg.setAttribute("transform", `translate(${thumbX}, ${y - thumbH / 2})`);
+      fill.setAttribute("y", y); fill.setAttribute("height", Math.max(0, (padTop + travel) - y));
+    }
+    render(cur);
+
+    let drag = false;
+    const fromE = e => {
+      const r = svg.getBoundingClientRect();
+      const p = Math.max(0, Math.min(1, 1 - ((e.clientY - (r.top + padTop)) / travel)));
+      const nv = Math.round(posToGain(p) * 1000) / 1000;
+      render(nv); onChange(nv);
+    };
+    svg.addEventListener("pointerdown", e => { drag = true; svg.setPointerCapture(e.pointerId); fromE(e); e.preventDefault(); });
+    svg.addEventListener("pointermove", e => { if (drag) fromE(e); });
+    const up = e => { if (drag) { drag = false; try { svg.releasePointerCapture(e.pointerId); } catch (x) {} } };
+    svg.addEventListener("pointerup", up); svg.addEventListener("pointercancel", up);
+
+    return { el: svg, set: render };
+  }
+
+  function makeStrip(c, i) {
+    const strip = document.createElement("div");
+    strip.className = "strip";
+    strip.style.borderColor = c.colour;
+
+    const hdr = document.createElement("div"); hdr.className = "grouphdr";
+    hdr.style.background = c.colour; strip.appendChild(hdr);
+
+    // Scrolling waveform preview (above the controls; scrolls down toward the fader)
+    const DPR = window.devicePixelRatio || 1;
+    const canvas = document.createElement("canvas"); canvas.className = "wave";
+    canvas.width = 72 * DPR; canvas.height = 120 * DPR;
+    const cctx = canvas.getContext("2d"); cctx.scale(DPR, DPR);
+    c.canvas = canvas; c.cctx = cctx;
+    strip.appendChild(canvas);
+
+    // Echo send
+    const sendWrap = document.createElement("div"); sendWrap.className = "mini";
+    sendWrap.innerHTML = '<div class="section-label">Echo</div>';
+    const sendTag = document.createElement("div"); sendTag.className = "valtag"; sendTag.textContent = Math.round(c.initialEcho * 100) + "%";
+    const sendKnob = makeKnob({ value: c.initialEcho, min: 0, max: 1, defaultVal: 0, color: "#9b5de5", size: 42,
+      onChange: v => { c.send.gain.value = v; sendTag.textContent = Math.round(v * 100) + "%"; } });
+    sendWrap.append(sendKnob.el, sendTag);
+
+    // Reverb send
+    const revWrap = document.createElement("div"); revWrap.className = "mini";
+    revWrap.innerHTML = '<div class="section-label">Reverb</div>';
+    const revTag = document.createElement("div"); revTag.className = "valtag"; revTag.textContent = Math.round(c.initialReverb * 100) + "%";
+    const revKnob = makeKnob({ value: c.initialReverb, min: 0, max: 1, defaultVal: 0, color: "#2ec4b6", size: 42,
+      onChange: v => { c.revSend.gain.value = v; revTag.textContent = Math.round(v * 100) + "%"; } });
+    revWrap.append(revKnob.el, revTag);
+
+    // Pan
+    const panWrap = document.createElement("div"); panWrap.className = "mini";
+    panWrap.innerHTML = '<div class="section-label">Pan</div>';
+    const panLabel = v => Math.abs(v) < 0.02 ? "C" : (v < 0 ? "L" + Math.round(-v * 100) : "R" + Math.round(v * 100));
+    const panTag = document.createElement("div"); panTag.className = "valtag"; panTag.textContent = panLabel(c.initialPan);
+    const panKnob = makeKnob({ value: c.initialPan, min: -1, max: 1, defaultVal: 0, bipolar: true, color: "#46c2ff", size: 42,
+      onChange: v => { c.panner.pan.value = v; panTag.textContent = panLabel(v); } });
+    panWrap.append(panKnob.el, panTag);
+
+    // VU + fader
+    const faderRow = document.createElement("div"); faderRow.className = "faderRow";
+    const vu = document.createElement("div"); vu.className = "vu";
+    const vuFill = document.createElement("i"); vu.appendChild(vuFill); c.meterEl = vuFill;
+    const fader = makeFader({ value: c.fader, min: 0, max: 1, color: c.colour, height: 225, onChange: v => setGroupFader(c, v) });
+    c.faderSet = fader.set;
+    faderRow.append(vu, fader.el);
+
+    // ON (grouped with same-number tracks)
+    const onBtn = document.createElement("div"); onBtn.className = "btn on active"; onBtn.textContent = "ON";
+    c.onEl = onBtn;
+    onBtn.addEventListener("click", () => setGroupOn(c));
+
+    // SOLO (grouped with same-number tracks)
+    const soloBtn = document.createElement("div"); soloBtn.className = "btn solo"; soloBtn.textContent = "SOLO";
+    c.soloEl = soloBtn;
+    soloBtn.addEventListener("click", () => setGroupSolo(c));
+
+    // number + editable track name (under the on/off switch)
+    const num = document.createElement("div"); num.className = "chnum";
+    num.textContent = c.number ? c.number : "—"; num.style.color = c.colour;
+    const name = document.createElement("input"); name.className = "name"; name.value = c.label;
+
+    strip.append(sendWrap, revWrap, panWrap, faderRow, onBtn, soloBtn, num, name);
+    return strip;
+  }
+
+  function makeEchoStrip() {
+    const strip = document.createElement("div"); strip.className = "strip echo";
+    strip.innerHTML = '<div class="grouphdr" style="background:#888"></div>' +
+                      '<div class="section-label">Echo Return</div><div class="section-label" style="color:#666">stereo</div>';
+    const faderRow = document.createElement("div"); faderRow.className = "faderRow";
+    const vuL = document.createElement("div"); vuL.className = "vu";
+    const fL = document.createElement("i"); vuL.appendChild(fL); echoMeterElL = fL;
+    const vuR = document.createElement("div"); vuR.className = "vu";
+    const fR = document.createElement("i"); vuR.appendChild(fR); echoMeterElR = fR;
+    const ef = makeFader({ value: 0.5, min: 0, max: 1, color: "#9b5de5", height: 225, onChange: v => { if (echoReturn) echoReturn.gain.value = v; } });
+    faderRow.append(vuL, vuR, ef.el);
+    strip.append(faderRow);
+    // Tap tempo -> echo delay time
+    const tapBtn = document.createElement("div"); tapBtn.className = "btn"; tapBtn.textContent = "TAP";
+    tapBtn.style.cssText = "background:#3a2f45;border-color:#9b5de5;color:#e8d7ff;";
+    const tapTag = document.createElement("div"); tapTag.className = "valtag";
+    echoTimeLabelEl = tapTag;
+    tapTag.textContent = Math.round(echoTimeSec * 1000) + " ms";
+    tapBtn.addEventListener("click", tapTempo);
+
+    // Subdivision selector: tap sets the beat, these set the echo's note value.
+    const subs = [["1/4", 1], ["1/8.", 0.75], ["1/8", 0.5], ["1/8T", 1 / 3], ["1/16", 0.25]];
+    const subWrap = document.createElement("div");
+    subWrap.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:3px;width:66px;margin-top:2px;";
+    const subBtns = [];
+    subs.forEach(([txt, factor]) => {
+      const b = document.createElement("div");
+      b.className = "btn"; b.textContent = txt;
+      b.style.cssText = "width:auto;padding:3px 0;font-size:10px;";
+      if (factor === echoDiv) b.classList.add("active");
+      b.classList.toggle("on", factor === echoDiv);
+      b.addEventListener("click", () => {
+        echoDiv = factor;
+        subBtns.forEach(x => x.classList.remove("on", "active"));
+        b.classList.add("on", "active");
+        applyEchoTime();
+      });
+      subBtns.push(b); subWrap.appendChild(b);
+    });
+
+    strip.append(tapBtn, tapTag, subWrap);
+    return strip;
+  }
+
+  function makeReverbStrip() {
+    const strip = document.createElement("div"); strip.className = "strip echo";
+    strip.innerHTML = '<div class="grouphdr" style="background:#9b5de5"></div>' +
+                      '<div class="section-label">Reverb Rtn</div><div class="section-label" style="color:#666">stereo</div>';
+    const faderRow = document.createElement("div"); faderRow.className = "faderRow";
+    const vuL = document.createElement("div"); vuL.className = "vu";
+    const fL = document.createElement("i"); vuL.appendChild(fL); reverbMeterElL = fL;
+    const vuR = document.createElement("div"); vuR.className = "vu";
+    const fR = document.createElement("i"); vuR.appendChild(fR); reverbMeterElR = fR;
+    const rf = makeFader({ value: 0.5, min: 0, max: 1, color: "#2ec4b6", height: 225, onChange: v => { if (reverbReturn) reverbReturn.gain.value = v; } });
+    faderRow.append(vuL, vuR, rf.el);
+    strip.append(faderRow);
+
+    // Reverb size: short / medium / long sets the impulse-response length.
+    const sizes = [["SHORT", 1.0, 3.2], ["MED", 2.4, 2.6], ["LONG", 5.0, 2.0]];
+    const sizeWrap = document.createElement("div");
+    sizeWrap.style.cssText = "display:flex;flex-direction:column;gap:4px;width:66px;margin-top:6px;";
+    const sizeBtns = [];
+    sizes.forEach(([txt, sec, decay], idx) => {
+      const b = document.createElement("div");
+      b.className = "btn"; b.textContent = txt; b.style.cssText = "width:auto;padding:4px 0;font-size:11px;";
+      if (idx === 1) b.classList.add("on", "active");   // medium = default
+      b.addEventListener("click", () => {
+        if (convolver) convolver.buffer = makeImpulse(sec, decay);
+        sizeBtns.forEach(x => x.classList.remove("on", "active"));
+        b.classList.add("on", "active");
+      });
+      sizeBtns.push(b); sizeWrap.appendChild(b);
+    });
+    strip.append(sizeWrap);
+
+    const tag = document.createElement("div"); tag.className = "chnum"; tag.textContent = "REV"; strip.append(tag);
+    return strip;
+  }
+
+  let masterMeterElL = null, masterBufL = new Float32Array(1024);
+  let masterMeterElR = null, masterBufR = new Float32Array(1024);
+  let echoMeterElL = null, echoMeterElR = null, echoBufL = new Float32Array(1024), echoBufR = new Float32Array(1024);
+  let reverbMeterElL = null, reverbMeterElR = null, reverbBufL = new Float32Array(1024), reverbBufR = new Float32Array(1024);
+  function makeMasterStrip() {
+    const strip = document.createElement("div"); strip.className = "strip master";
+    strip.innerHTML = '<div class="grouphdr" style="background:#cdd3dd"></div><div class="section-label">Master</div>';
+    const faderRow = document.createElement("div"); faderRow.className = "faderRow";
+    // Stereo metering: separate L and R bars.
+    const vuL = document.createElement("div"); vuL.className = "vu"; vuL.style.width = "10px";
+    const fillL = document.createElement("i"); vuL.appendChild(fillL); masterMeterElL = fillL;
+    const vuR = document.createElement("div"); vuR.className = "vu"; vuR.style.width = "10px";
+    const fillR = document.createElement("i"); vuR.appendChild(fillR); masterMeterElR = fillR;
+    const mf = makeFader({ value: 0.8, min: 0, max: 1, color: "#cdd3dd", height: 225, onChange: v => { if (masterGain) masterGain.gain.value = v; } });
+    faderRow.append(vuL, vuR, mf.el);
+    strip.append(faderRow);
+    const lr = document.createElement("div"); lr.className = "valtag"; lr.textContent = "L   R"; strip.append(lr);
+    // Rude solo light: blinks while any channel is soloed; click to clear all solos.
+    rudeEl = document.createElement("div"); rudeEl.className = "rude"; rudeEl.textContent = "SOLO";
+    rudeEl.title = "Solo active — click to clear all solos";
+    rudeEl.addEventListener("click", clearSolos);
+    rudeEl.classList.toggle("active", channels.some(c => c.solo));
+    strip.append(rudeEl);
+    const tag = document.createElement("div"); tag.className = "chnum"; tag.textContent = "OUT"; strip.append(tag);
+    return strip;
+  }
+
+  // ----- Transport (all tracks play in sync) -----
+  function togglePlay() { if (!channels.length) return; isPlaying ? pause() : play(); }
+
+  function play() {
+    if (ctx.state === "suspended") ctx.resume();
+    if (offset >= maxDuration) offset = 0;
+    sources = [];
+    const when = ctx.currentTime + 0.06;       // small common lead so all start together
+    let longest = null, longestDur = -1;
+    for (const c of channels) {
+      if (offset >= c.buffer.duration) continue; // this track already ended at this position
+      const src = ctx.createBufferSource();
+      src.buffer = c.buffer; src.connect(c.gain);
+      src.start(when, offset);
+      sources.push(src);
+      if (c.buffer.duration > longestDur) { longestDur = c.buffer.duration; longest = src; }
+    }
+    stopFlag = false;
+    if (longest) longest.onended = onEnded;
+    startTime = when; isPlaying = true;
+    playBtn.textContent = "⏸ Pause"; playBtn.classList.add("playing");
+  }
+
+  function pause() {
+    if (!isPlaying) return;
+    offset += ctx.currentTime - startTime;
+    if (offset < 0) offset = 0;
+    stop(true); isPlaying = false;
+    playBtn.textContent = "▶ Play"; playBtn.classList.remove("playing");
+  }
+
+  function stop(manual) {
+    stopFlag = manual;
+    for (const s of sources) { try { s.onended = null; s.stop(); } catch (e) {} try { s.disconnect(); } catch (e) {} }
+    sources = [];
+  }
+
+  function onEnded() {
+    if (stopFlag) return;
+    isPlaying = false; offset = 0;
+    playBtn.textContent = "▶ Play"; playBtn.classList.remove("playing");
+  }
+
+  function rewind() {
+    const was = isPlaying; stop(true); isPlaying = false; offset = 0;
+    if (was) play(); else { playBtn.textContent = "▶ Play"; playBtn.classList.remove("playing"); }
+  }
+
+  // Jump all tracks by `delta` seconds (negative = back). Keeps play/pause state.
+  function skip(delta) {
+    if (!channels.length) return;
+    const pos = isPlaying ? offset + Math.max(0, ctx.currentTime - startTime) : offset;
+    const np = Math.max(0, Math.min(pos + delta, maxDuration));
+    const was = isPlaying;
+    stop(true); isPlaying = false; offset = np;
+    if (was) play();
+    else timeLabel.textContent = fmt(np) + " / " + fmt(maxDuration);
+  }
+
+  // ----- Meters + clock -----
+  function rms(an, buf) {
+    an.getFloatTimeDomainData(buf);
+    let s = 0; for (let i = 0; i < buf.length; i++) s += buf[i] * buf[i];
+    return Math.sqrt(s / buf.length);
+  }
+  // Map RMS -> 0..100 with an exaggerated (sqrt) curve so low levels read clearly.
+  const lvlOf = r => Math.min(100, Math.sqrt(r) * 125);
+  // The fill <i> is a dark cover from the top: its height is the UNLIT portion.
+  const setMeter = (el, lvl) => { el.style.height = (100 - Math.min(100, lvl)) + "%"; };
+  const WAVE_W = 72, WAVE_H = 120, WINDOW_SEC = 4;  // 4s of look-ahead visible
+  function drawWave(c, cur) {
+    const g = c.cctx; if (!g) return;
+    g.clearRect(0, 0, WAVE_W, WAVE_H);
+    const mid = WAVE_W / 2;
+    // y=0 (top) is the future, y=H (bottom, by the fader) is "now".
+    g.fillStyle = c.colour;
+    for (let y = 0; y < WAVE_H; y++) {
+      const t = cur + ((WAVE_H - y) / WAVE_H) * WINDOW_SEC;
+      if (t < 0 || t >= c.dur) continue;
+      const amp = c.peaks[(t * c.binsPerSec) | 0] || 0;
+      const half = amp * (mid - 2);
+      if (half > 0.3) g.fillRect(mid - half, y, half * 2, 1);
+    }
+    // playhead line at the bottom (next to the fader)
+    g.fillStyle = "rgba(255,255,255,0.55)";
+    g.fillRect(0, WAVE_H - 2, WAVE_W, 2);
+  }
+
+  function loop() {
+    const cur = (ctx && maxDuration)
+      ? (isPlaying ? offset + Math.max(0, ctx.currentTime - startTime) : offset)
+      : 0;
+    for (const c of channels) {
+      if (c.meterEl) {
+        const target = lvlOf(rms(c.analyser, c.buf));
+        c.level = Math.max(target, c.level * 0.86);   // fast attack, slow decay
+        setMeter(c.meterEl, c.level);
+      }
+      if (c.cctx) drawWave(c, cur);
+    }
+    if (masterMeterElL && masterAnalyserL) {
+      setMeter(masterMeterElL, lvlOf(rms(masterAnalyserL, masterBufL)));
+      setMeter(masterMeterElR, lvlOf(rms(masterAnalyserR, masterBufR)));
+    }
+    if (echoMeterElL && echoAnalyserL) {
+      setMeter(echoMeterElL, lvlOf(rms(echoAnalyserL, echoBufL)));
+      setMeter(echoMeterElR, lvlOf(rms(echoAnalyserR, echoBufR)));
+    }
+    if (reverbMeterElL && reverbAnalyserL) {
+      setMeter(reverbMeterElL, lvlOf(rms(reverbAnalyserL, reverbBufL)));
+      setMeter(reverbMeterElR, lvlOf(rms(reverbAnalyserR, reverbBufR)));
+    }
+    if (maxDuration)
+      timeLabel.textContent = fmt(Math.min(cur, maxDuration)) + " / " + fmt(maxDuration);
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  autoload();   // try to load the Tracks/ folder immediately
+})();
+</script>
+</body>
+</html>
